@@ -1,0 +1,50 @@
+steps:
+  # Google Cloud Build 서비스 계정 인증
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        gcloud auth configure-docker ${_LOCATION}-docker.pkg.dev
+
+  # Docker 이미지 빌드
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/${_PROJECT}/${_REPOSITORY}/${_IMAGE}:latest"
+      - "."
+
+  # Docker 이미지 Push
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "${_LOCATION}-docker.pkg.dev/${_PROJECT}/${_REPOSITORY}/${_IMAGE}:latest"
+
+  # Cloud Run에 배포
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    args:
+      - "gcloud"
+      - "run"
+      - "deploy"
+      - "${_CLOUD_RUN_SERVICE_NAME}"
+      - "--image"
+      - "${_LOCATION}-docker.pkg.dev/${_PROJECT}/${_REPOSITORY}/${_IMAGE}:latest"
+      - "--region"
+      - "${_LOCATION}"
+      - "--platform"
+      - "managed"
+      - "--allow-unauthenticated"
+
+images:
+  - "${_LOCATION}-docker.pkg.dev/${_PROJECT}/${_REPOSITORY}/${_IMAGE}:latest"
+
+substitutions:
+  _LOCATION: "us-central1"
+  _PROJECT: "tpcg-ark-ai"
+  _REPOSITORY: "agent-space-middleware" # Artifact Registry 저장소 이름을 여기에 입력
+  _IMAGE: "agent-space-middleware"
+  _CLOUD_RUN_SERVICE_NAME: "agent-space-middleware" # Cloud Run 서비스 이름
+
+options:
+  logging: CLOUD_LOGGING_ONLY
