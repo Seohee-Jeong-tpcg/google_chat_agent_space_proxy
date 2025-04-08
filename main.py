@@ -99,38 +99,44 @@ def create_answer_card(
     answer_text = answer.get("answerText", "❌ 답변이 없습니다.")
     references = answer.get("references", [])
 
-    widgets = [
-        {"textParagraph": {"text": f"<b>❓ 질문:</b><br>{query}"}},
-        {"textParagraph": {"text": f"<b>💡 답변:</b><br>{answer_text}"}},
-    ]
+    widgets = []
 
     if references:
-        widgets.append({"divider": {}})
-        widgets.append({"textParagraph": {"text": "<b>📚 인용 문서:</b>"}})
         for ref in references:
+            widgets.append({"divider": {}})
             doc = ref.get("chunkInfo", {}).get("documentMetadata", {})
             title = doc.get("title", "No Title")
-            uri = doc.get("uri", "")
+            uri = doc.get("uri", "no uri")
+            document = doc.get("document", "No document uri")
+            widgets.append(
+                {"textParagraph": {"text": f"<b>📚 데이터 스토어 정보 : {title}</b>"}}
+            )
             widgets.append(
                 {
                     "decoratedText": {
-                        "text": f"{title}",
-                        "button": {
-                            "text": "바로가기",
-                            "onClick": {"openLink": {"url": uri}},
-                        },
+                        "text": f"uri: {uri}",
                     }
                 }
             )
+            widgets.append(
+                {
+                    "decoratedText": {
+                        "text": f"document: {document}",
+                    }
+                }
+            )
+
+    widgets.pop(0)  # divider 맨 위에 하나 되어있어서 삭제
+
     response_data = {
-        "text": f"{display_name}님의 질문에 대한 답변입니다.",
+        "text": answer_text,
         "cardsV2": [
             {
                 "cardId": "answerCard",
                 "card": {
                     "name": "Answer Card",
                     "header": {
-                        "title": f"Hello, {display_name}!",
+                        "title": "Reference 정보",
                     },
                     "sections": [{"widgets": widgets}],
                 },
