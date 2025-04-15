@@ -3,6 +3,9 @@ from fastapi import FastAPI, Request, HTTPException
 import requests
 import google.auth
 import google.auth.transport.requests
+from google.cloud import storage
+from google.oauth2 import service_account
+from datetime import timedelta
 
 app = FastAPI()
 
@@ -95,7 +98,6 @@ def generate_answer(query: str, session: str, query_id: str) -> dict:
 def create_answer_card(
     user: Mapping[str, Any], query: str, answer: Mapping[str, Any]
 ) -> Mapping[str, Any]:
-    display_name = user.get("displayName", "User")
     answer_text = answer.get("answerText", "❌ 답변이 없습니다.")
     references = answer.get("references", [])
 
@@ -107,6 +109,7 @@ def create_answer_card(
             doc = ref.get("chunkInfo", {}).get("documentMetadata", {})
             title = doc.get("title", "No Title")
             uri = doc.get("uri", "no uri")
+
             document = doc.get("document", "No document uri")
             widgets.append(
                 {"textParagraph": {"text": f"<b>📚 데이터 스토어 정보 : {title}</b>"}}
@@ -125,6 +128,23 @@ def create_answer_card(
                     }
                 }
             )
+            if uri != "no uri":
+                bucket_name = uri.split("/")[2]
+                blob_name = uri.split("/")[3]
+                signed_url = generate_signed_url(bucket_name, blob_name, 1)
+                widgets.append(
+                    {
+                        "buttonList": {
+                            "buttons": [
+                                {
+                                    "text": "문서 확인",
+                                    "type": "FILLED",
+                                    "onClick": {"openLink": {"url": signed_url}},
+                                }
+                            ]
+                        }
+                    }
+                )
 
     widgets.pop(0)  # divider 맨 위에 하나 되어있어서 삭제
 
@@ -177,3 +197,36 @@ async def chat_app(req: Request) -> Mapping[str, Any]:
     print("[DEBUG] Answer response:", answer_response)
 
     return create_answer_card(user, query, answer_response.get("answer", {}))
+
+
+def generate_signed_url(bucket_name, blob_name, expiration_hours=1):
+    """
+    Generate a signed URL for a GCS object.
+
+    Args:
+        bucket_name (str): The name of the GCS bucket.
+        blob_name (str): The name of the GCS object (file).
+        expiration_hours (int): The expiration time of the signed URL in hours. Default is 1 hour.
+
+    Returns:
+        str: The signed URL for the GCS object.
+    """
+    # Initialize the Google Cloud Storage client with the service account credentials
+    client = storage.Client(
+        credentials=service_account.Credentials.from_service_account_file(
+            "gcs_key.json"
+        ),
+        project="tpcg-ark-ai",
+    )
+
+    # Get the bucket and blob (file)
+    bucket = client.get_bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+
+    # Generate the signed URL for the blob (file)
+    signed_url = blob.generate_signed_url(
+        expiration=timedelta(hours=expiration_hours),  # Set the expiration time
+        method="GET",  # Allows GET requests to download the file
+    )
+
+    return signed_url
