@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Any, Mapping
 from fastapi import FastAPI, Request, HTTPException
 import requests
@@ -5,9 +6,14 @@ import google.auth
 import google.auth.transport.requests
 from google.cloud import storage
 from google.oauth2 import service_account
-from datetime import timedelta
 
 app = FastAPI()
+PROJECT_ID = "tpcg-ark-ai"
+PROJECT_NUMBER = "661430115304"
+LOCATION = "global"
+COLLECTION = "default_collection"
+APP_ID = "connect-arkai-agentspace-t_1744609813251"
+ENGINE_VERSION = "v1alpha"
 
 
 def get_access_token() -> str:
@@ -16,13 +22,22 @@ def get_access_token() -> str:
     return credentials.token
 
 
-def search_vertex(query: str) -> dict:
-    access_token = get_access_token()
+def make_api_request(endpoint: str, payload: dict, access_token: str) -> dict:
+    """
+    Helper function to make a POST request to the Discovery Engine API.
+
+    Args:
+        endpoint (str): The API endpoint (e.g., "default_search:search", "cx_assistant:assist", "default_search:answer").
+        payload (dict): The request payload.
+        access_token (str): The access token for authentication.
+
+    Returns:
+        dict: The JSON response from the API.
+    """
     url = (
-        "https://discoveryengine.googleapis.com/v1alpha/"
-        "projects/661430115304/locations/global/collections/default_collection/"
-        "engines/engine-agentspace_1741937659246/"
-        "servingConfigs/default_search:search"
+        f"https://discoveryengine.googleapis.com/{ENGINE_VERSION}/"
+        f"projects/{PROJECT_NUMBER}/locations/{LOCATION}/collections/{COLLECTION}/"
+        f"engines/{APP_ID}/{endpoint}"
     )
 
     headers = {
@@ -30,10 +45,37 @@ def search_vertex(query: str) -> dict:
         "Content-Type": "application/json",
     }
 
+    print(f"[DEBUG] {endpoint} Payload:", payload)
+
+    response = requests.post(url, headers=headers, json=payload)
+    print(f"[DEBUG] {endpoint} Response:", response)
+
+    try:
+        response.raise_for_status()
+        print(f"[DEBUG] {endpoint} Response JSON:", response.json())
+        return response.json()
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] {endpoint} API Error: {e}")
+        raise HTTPException(
+            status_code=response.status_code, detail=f"{endpoint} API Error"
+        )
+
+
+def default_search(query: str) -> dict:
+    """
+    Perform a default search using the Discovery Engine API.
+
+    Args:
+        query (str): The search query.
+
+    Returns:
+        dict: The search results.
+    """
+    access_token = get_access_token()
     payload = {
         "query": query,
         "pageSize": 5,
-        "session": "projects/661430115304/locations/global/collections/default_collection/engines/engine-agentspace_1741937659246/sessions/-",
+        "session": f"projects/{PROJECT_NUMBER}/locations/{LOCATION}/collections/{COLLECTION}/engines/{APP_ID}/sessions/-",
         "spellCorrectionSpec": {"mode": "AUTO"},
         "languageCode": "ko",
         "relevanceScoreSpec": {"returnRelevanceScore": True},
@@ -42,35 +84,42 @@ def search_vertex(query: str) -> dict:
             "filterExtractionCondition": "ENABLED"
         },
     }
+    return make_api_request(
+        "servingConfigs/default_search:search", payload, access_token
+    )
 
-    print("[DEBUG] Search Payload:", payload)
 
-    response = requests.post(url, headers=headers, json=payload)
-    print("[DEBUG] Search Responses : ", response)
+def assistant_search(query: str) -> dict:
+    """
+    Perform an assistant search using the Discovery Engine API.
 
-    try:
-        response.raise_for_status()
-        print("[DEBUG] Search Responses : ", response.json())
-        return response.json()
-    except requests.exceptions.HTTPError as e:
-        print(f"[ERROR] Search API Error: {e}")
-        raise HTTPException(status_code=response.status_code, detail="Search API Error")
+    Args:
+        query (str): The search query.
+
+    Returns:
+        dict: The assistant search results.
+    """
+
+    access_token = get_access_token()
+    payload = {
+        "query": {"text": query},
+    }
+    return make_api_request("assistants/cx_assistant:assist", payload, access_token)
 
 
 def generate_answer(query: str, session: str, query_id: str) -> dict:
+    """
+    Generate an answer using the Discovery Engine API.
+
+    Args:
+        query (str): The query text.
+        session (str): The session ID.
+        query_id (str): The query ID.
+
+    Returns:
+        dict: The generated answer.
+    """
     access_token = get_access_token()
-    url = (
-        "https://discoveryengine.googleapis.com/v1alpha/"
-        "projects/661430115304/locations/global/collections/default_collection/"
-        "engines/engine-agentspace_1741937659246/"
-        "servingConfigs/default_search:answer"
-    )
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-
     payload = {
         "query": {"text": query, "queryId": query_id},
         "session": session,
@@ -83,16 +132,9 @@ def generate_answer(query: str, session: str, query_id: str) -> dict:
             "includeCitations": True,
         },
     }
-
-    print("[DEBUG] Answer Payload:", payload)
-
-    response = requests.post(url, headers=headers, json=payload)
-    try:
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as e:
-        print(f"[ERROR] Answer API Error: {e}")
-        raise HTTPException(status_code=response.status_code, detail="Answer API Error")
+    return make_api_request(
+        "servingConfigs/default_search:answer", payload, access_token
+    )
 
 
 def create_answer_card(
@@ -100,10 +142,12 @@ def create_answer_card(
 ) -> Mapping[str, Any]:
     answer_text = answer.get("answerText", "❌ 답변이 없습니다.")
     references = answer.get("references", [])
+    response_data = {
+        "text": answer_text,
+    }
 
-    widgets = []
-
-    if references:
+    if len(references):
+        widgets = []
         for ref in references:
             widgets.append({"divider": {}})
             doc = ref.get("chunkInfo", {}).get("documentMetadata", {})
@@ -146,11 +190,8 @@ def create_answer_card(
                     }
                 )
 
-    widgets.pop(0)  # divider 맨 위에 하나 되어있어서 삭제
-
-    response_data = {
-        "text": answer_text,
-        "cardsV2": [
+        widgets.pop(0)  # divider 맨 위에 하나 되어있어서 삭제
+        response_data["cardsV2"] = [
             {
                 "cardId": "answerCard",
                 "card": {
@@ -161,8 +202,7 @@ def create_answer_card(
                     "sections": [{"widgets": widgets}],
                 },
             }
-        ],
-    }
+        ]
 
     print("DEBUG :: RESPONSE CHAT FORM", response_data)
 
@@ -179,24 +219,46 @@ async def chat_app(req: Request) -> Mapping[str, Any]:
 
     user = event["user"]
     query = event["message"].get("argumentText", "").strip()
+    session = ""
+    print("[DEBUG] User:", user)
 
-    search_response = search_vertex(query)
+    search_response = default_search(query)
     print("[DEBUG] Search response:", search_response)
-
     session = search_response.get("sessionInfo", {}).get("name", "")
     query_id = search_response.get("sessionInfo", {}).get("queryId", "")
+    if search_response.get("results") is not None:
+        # default_search에서 결과가 있을 경우 answer 생성
 
-    if not session or not query_id:
-        return create_answer_card(
-            user,
-            query,
-            {"answerText": "⚠️ 검색 결과에서 세션 정보를 가져올 수 없습니다."},
+        if not session or not query_id:
+            return create_answer_card(
+                user,
+                query,
+                {"answerText": "⚠️ 검색 결과에서 세션 정보를 가져올 수 없습니다."},
+            )
+
+        answer_response = generate_answer(query, session, query_id)
+        answer_response = answer_response.get(
+            "answer", {"answerText": "⚠️ 검색 결과가 없습니다. 다른 질문을 해보세요."}
         )
+        print("[DEBUG] Answer response:", answer_response)
 
-    answer_response = generate_answer(query, session, query_id)
-    print("[DEBUG] Answer response:", answer_response)
+    else:
+        # default_search에서 결과가 없을 경우 assistant_search로 대체
+        formatted_query = f"""user_id : {user['email']} / query : {query}"""
+        search_response = assistant_search(formatted_query)
+        print("[DEBUG] Assistant search response:", search_response)
+        replies = search_response.get("answer", {}).get("replies", [])
+        answer_text = "⚠️ 검색 결과가 없습니다. 다른 질문을 해보세요."
+        if replies:
+            answer_text = ""
+            for reply in replies:
+                grounded_content = (
+                    reply.get("groundedContent", {}).get("content", {}).get("text")
+                )
+                answer_text += f"{grounded_content} "
+        answer_response = {"answerText": answer_text}
 
-    return create_answer_card(user, query, answer_response.get("answer", {}))
+    return create_answer_card(user, query, answer_response)
 
 
 def generate_signed_url(bucket_name, blob_name, expiration_hours=1):

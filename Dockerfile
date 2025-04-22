@@ -1,8 +1,11 @@
 # 사용하려는 베이스 이미지를 선택합니다.
-FROM python:3.9-slim
+FROM python:3.13.3-slim
 
 # 작업 디렉터리 설정
 WORKDIR /app
+
+# 시스템 패키지 설치
+RUN apt-get update && apt-get install -y libpq-dev gcc
 
 # 의존성 설치
 COPY requirements.txt .
