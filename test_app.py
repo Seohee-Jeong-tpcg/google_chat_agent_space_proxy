@@ -6,7 +6,7 @@ client = TestClient(app)
 # 테스트용 요청 데이터를 설정합니다.
 test_event = {
     "user": {"displayName": "Test User", "email": "seohee@tpcg.co.kr"},
-    "message": {"argumentText": "귀여운 캐릭터가 나오는 카드"},
+    "message": {"argumentText": "카페 실적이 높은 사람을 위한 카드가 뭐야?"},
     "space": {"name": "test space"},
 }
 

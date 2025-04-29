@@ -43,13 +43,9 @@ def make_api_request(endpoint: str, payload: dict, access_token: str) -> dict:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
-        "X-Goog-User-Project": PROJECT_NUMBER,
     }
 
-    print(f"[DEBUG] {endpoint} Payload:", payload)
-
     response = requests.post(url, headers=headers, json=payload)
-    print(f"[DEBUG] {endpoint} Response:", response)
 
     try:
         response.raise_for_status()
@@ -57,7 +53,6 @@ def make_api_request(endpoint: str, payload: dict, access_token: str) -> dict:
         return response.json()
     except requests.exceptions.HTTPError as e:
         print(f"[ERROR] {endpoint} API Error: {e}")
-        print(e)
         raise HTTPException(
             status_code=response.status_code, detail=f"{endpoint} API Error"
         )
@@ -104,14 +99,12 @@ def assistant_search(query: str) -> dict:
 
     access_token = get_access_token()
     payload = {
-        # "name": f"projects/{PROJECT_NUMBER}/locations/{LOCATION}/collections/{COLLECTION}/engines/{APP_ID}/assistants/cx_assistant:assistant",
         "query": {"text": query},
-        # "assistSkippingMode": "REQUEST_ASSIST",
     }
     return make_api_request("assistants/cx_assistant:assist", payload, access_token)
 
 
-def generate_answer(query: str, session: str, query_id: str) -> dict:
+def generate_with_answer_api(query: str, session: str, query_id: str) -> dict:
     """
     Generate an answer using the Discovery Engine API.
 
@@ -141,78 +134,6 @@ def generate_answer(query: str, session: str, query_id: str) -> dict:
     )
 
 
-def create_answer_card(
-    user: Mapping[str, Any], query: str, answer: Mapping[str, Any]
-) -> Mapping[str, Any]:
-    answer_text = answer.get("answerText", "❌ 답변이 없습니다.")
-    references = answer.get("references", [])
-    response_data = {
-        "text": answer_text,
-    }
-
-    if len(references):
-        widgets = []
-        for ref in references:
-            widgets.append({"divider": {}})
-            doc = ref.get("chunkInfo", {}).get("documentMetadata", {})
-            title = doc.get("title", "No Title")
-            uri = doc.get("uri", "no uri")
-
-            document = doc.get("document", "No document uri")
-            widgets.append(
-                {"textParagraph": {"text": f"<b>📚 데이터 스토어 정보 : {title}</b>"}}
-            )
-            widgets.append(
-                {
-                    "decoratedText": {
-                        "text": f"uri: {uri}",
-                    }
-                }
-            )
-            widgets.append(
-                {
-                    "decoratedText": {
-                        "text": f"document: {document}",
-                    }
-                }
-            )
-            if uri != "no uri":
-                bucket_name = uri.split("/")[2]
-                blob_name = uri.split("/")[3]
-                signed_url = generate_signed_url(bucket_name, blob_name, 1)
-                widgets.append(
-                    {
-                        "buttonList": {
-                            "buttons": [
-                                {
-                                    "text": "문서 확인",
-                                    "type": "FILLED",
-                                    "onClick": {"openLink": {"url": signed_url}},
-                                }
-                            ]
-                        }
-                    }
-                )
-
-        widgets.pop(0)  # divider 맨 위에 하나 되어있어서 삭제
-        response_data["cardsV2"] = [
-            {
-                "cardId": "answerCard",
-                "card": {
-                    "name": "Answer Card",
-                    "header": {
-                        "title": "Reference 정보",
-                    },
-                    "sections": [{"widgets": widgets}],
-                },
-            }
-        ]
-
-    print("DEBUG :: RESPONSE CHAT FORM", response_data)
-
-    return response_data
-
-
 @app.post("/chat")
 async def chat_app(req: Request) -> Mapping[str, Any]:
     event = await req.json()
@@ -230,51 +151,53 @@ async def chat_app(req: Request) -> Mapping[str, Any]:
     print("[DEBUG] Search response:", search_response)
     session = search_response.get("sessionInfo", {}).get("name", "")
     query_id = search_response.get("sessionInfo", {}).get("queryId", "")
+
+    response_data = {
+        "user": user,
+        "query": query,
+        "response_data": {"answerText": "⚠️ Assistant search에서 오류가 발생했습니다."},
+    }
+
     if search_response.get("results") is not None:
         # default_search에서 결과가 있을 경우 answer 생성
 
         if not session or not query_id:
-            return create_answer_card(
-                user,
-                query,
-                {"answerText": "⚠️ 검색 결과에서 세션 정보를 가져올 수 없습니다."},
+            response_data["response_data"][
+                "answerText"
+            ] = "⚠️ 검색 결과에서 세션 정보를 가져올 수 없습니다."
+            return response_data
+        else:
+            answer_response = generate_with_answer_api(query, session, query_id)
+            answer_response = answer_response.get(
+                "answer",
+                {"answerText": "⚠️ 검색 결과가 없습니다. 다른 질문을 해보세요."},
             )
-
-        answer_response = generate_answer(query, session, query_id)
-        answer_response = answer_response.get(
-            "answer", {"answerText": "⚠️ 검색 결과가 없습니다. 다른 질문을 해보세요."}
-        )
-        print("[DEBUG] Answer response:", answer_response)
+            print("[DEBUG] Answer response:", answer_response)
 
     else:
         # default_search에서 결과가 없을 경우 assistant_search로 대체
-        # formatted_query = f"""user_id : {user['email']} / query : {query}"""
-
-        formatted_query = (
-            '{ "user_id" : '
-            + '"'
-            + user["email"]
-            + '"'
-            + " , "
-            + '"query" : "'
-            + query
-            + '" }'
-        )
-
+        query_arr = [
+            '{ "user_id" : "',
+            user["email"],
+            ' " , ',
+            '"query" : "',
+            query,
+            '" }',
+        ]
+        formatted_query = "".join(query_arr)
         try:
             search_response = assistant_search(formatted_query)
             print("[DEBUG] Assistant search response:", search_response)
             replies = search_response.get("answer", {}).get("replies", [])
-
         except Exception as e:
             print("[ERROR] Assistant search error:", e)
-
-            return create_answer_card(
-                user,
-                query,
-                {"answerText": "⚠️ Assistant search에서 오류가 발생했습니다."},
-            )
-
+            return {
+                "user": user,
+                "query": query,
+                "response_data": {
+                    "answerText": "⚠️ Assistant search에서 오류가 발생했습니다."
+                },
+            }
         answer_text = "⚠️ 검색 결과가 없습니다. 다른 질문을 해보세요."
         if replies:
             answer_text = ""
@@ -284,8 +207,9 @@ async def chat_app(req: Request) -> Mapping[str, Any]:
                 )
                 answer_text += f"{grounded_content} "
         answer_response = {"answerText": answer_text}
+        response_data["response_data"] = answer_response
 
-    return create_answer_card(user, query, answer_response)
+    return response_data
 
 
 def generate_signed_url(bucket_name, blob_name, expiration_hours=1):
